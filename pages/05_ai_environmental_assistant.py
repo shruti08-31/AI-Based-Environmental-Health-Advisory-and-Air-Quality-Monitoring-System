@@ -94,6 +94,7 @@ def main() -> None:
             user_query=active_prompt,
             routed=routed,
             app_config=config,
+            chat_history=history[:-1],
         )
 
         engine_label = (

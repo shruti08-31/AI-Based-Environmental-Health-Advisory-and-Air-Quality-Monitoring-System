@@ -1,4 +1,5 @@
 ﻿from datetime import datetime, timezone
+import time
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -18,7 +19,6 @@ from src.validation import ValidationResult, validate_aqi_reading
 
 # Verified WAQI Delhi station presets (used if live station search has not populated yet)
 DELHI_PRESET_STATIONS: list[StationSearchResult] = [
-    StationSearchResult(uid=None, station_name="Delhi (City-Wide Feed)", aqi_raw="Live", timestamp_str=None, latitude=28.6139, longitude=77.2090),
     StationSearchResult(uid=3715, station_name="ITO, Delhi, India", aqi_raw="Live", timestamp_str=None, latitude=28.6289, longitude=77.2405),
     StationSearchResult(uid=7024, station_name="US Diplomatic Post: New Delhi, India", aqi_raw="Live", timestamp_str=None, latitude=28.5981, longitude=77.1891),
     StationSearchResult(uid=2553, station_name="Anand Vihar, Delhi, India", aqi_raw="Live", timestamp_str=None, latitude=28.6468, longitude=77.3160),
@@ -27,6 +27,7 @@ DELHI_PRESET_STATIONS: list[StationSearchResult] = [
     StationSearchResult(uid=2556, station_name="R K Puram, Delhi, India", aqi_raw="Live", timestamp_str=None, latitude=28.5633, longitude=77.1869),
     StationSearchResult(uid=10112, station_name="Dwarka-Sector 8, Delhi, India", aqi_raw="Live", timestamp_str=None, latitude=28.5710, longitude=77.0719),
     StationSearchResult(uid=10118, station_name="Rohini, Delhi, India", aqi_raw="Live", timestamp_str=None, latitude=28.7325, longitude=77.1199),
+    StationSearchResult(uid=None, station_name="Delhi (City-Wide Feed)", aqi_raw="Live", timestamp_str=None, latitude=28.6139, longitude=77.2090),
 ]
 
 
@@ -48,14 +49,6 @@ def _classify_severity_label(aqi_val: float | int | None) -> str:
 def _cached_search_cities(keyword: str, token_fingerprint: str) -> list[StationSearchResult]:
     client = WaqiClient(app_config=config)
     return client.search_cities(keyword)
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _cached_fetch_city_aqi(target: str, token_fingerprint: str) -> tuple[AqiReading, str]:
-    client = WaqiClient(app_config=config)
-    reading = client.get_city_aqi(target)
-    fetched_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    return reading, fetched_utc
 
 
 def _render_pollutant_chart(pollutants: dict[str, float | None], station_label: str) -> None:
@@ -104,28 +97,11 @@ def _render_reading_view(
         else "Coordinates Missing"
     )
     obs_display = reading.observation_time or "Timestamp Missing"
-    cache_note = (
-        f"Cached response (TTL 300s) • Retrieved at {fetched_utc}"
-        if from_cache
-        else f"Freshly retrieved at {fetched_utc}"
-    )
-
-    if from_cache:
-        render_warning_banner(
-            f"Displaying cached WAQI response retrieved at {fetched_utc}. Click 'Force Refresh' to query WAQI again.",
-            is_placeholder=False,
-        )
-
-    persist_status = st.session_state.get("last_persisted_status")
-    if persist_status:
-        st.caption(persist_status)
 
     for err in validation.errors:
         st.error(f"Validation Error: {err}")
-    for warn in validation.warnings:
-        st.warning(f"Data Quality Warning: {warn}")
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     with c1:
         render_metric_card(
             label="Reported AQI",
@@ -141,13 +117,6 @@ def _render_reading_view(
             is_placeholder=False,
         )
     with c3:
-        render_metric_card(
-            label="Observation Timestamp",
-            value=obs_display,
-            meta=cache_note,
-            is_placeholder=False,
-        )
-    with c4:
         render_metric_card(
             label="Station Coordinates",
             value=coord_display,
@@ -170,17 +139,34 @@ def _render_reading_view(
 
     _render_pollutant_chart(reading.pollutants, station_display)
 
-    render_info_panel(
-        title="Station & Telemetry Metadata",
-        body=(
-            f"<b>Station:</b> {station_display}<br>"
-            f"<b>Query Target:</b> {reading.query}<br>"
-            f"<b>Coordinates:</b> {coord_display}<br>"
-            f"<b>Observation Time:</b> {obs_display}<br>"
-            f"<b>Validation Status:</b> {'Passed' if validation.is_valid else 'Issues Detected'}"
-        ),
-        is_placeholder=False,
-    )
+    with st.container(border=True):
+        st.markdown("#### Station & Telemetry Metadata")
+        validation_badge = "Passed" if validation.is_valid else "Issues Detected"
+        st.markdown(
+            f"""
+| Field | Details |
+| :--- | :--- |
+| **Station** | {station_display} |
+| **Query Target** | `{reading.query}` |
+| **Coordinates** | {coord_display} |
+| **Observation Time** | {obs_display} |
+| **Validation Status** | {validation_badge} |
+            """.strip()
+        )
+
+    persist_status = st.session_state.get("last_persisted_status")
+    with st.expander("Persistence & Data Quality Diagnostics", expanded=False):
+        if from_cache:
+            st.caption(
+                f"Displaying session WAQI response retrieved at {fetched_utc}. Click 'Fetch Live AQI' or 'Force Refresh' to query WAQI again."
+            )
+        if persist_status:
+            st.info(persist_status)
+        if validation.warnings:
+            for warn in validation.warnings:
+                st.warning(f"Data Quality Warning: {warn}")
+        elif not persist_status and not from_cache:
+            st.caption("No persistence or data quality warnings.")
 
 
 def main() -> None:
@@ -232,21 +218,21 @@ def main() -> None:
 
     if search_clicked:
         try:
-            matches = _cached_search_cities(cleaned_city, token_fp)
-            st.session_state["waqi_search_matches"] = matches
+            _cached_search_cities.clear()
+            matches_found = _cached_search_cities(cleaned_city, token_fp)
+            st.session_state["waqi_search_matches"] = matches_found
         except WaqiClientError as exc:
             st.error(f"Station search failed ({exc.kind.value}): {exc.message}")
 
-    matches: list[StationSearchResult] = st.session_state.get("waqi_search_matches", list(DELHI_PRESET_STATIONS))
+    # Sort matches so active stations reporting a live numeric AQI appear first
+    matches = sorted(
+        st.session_state.get("waqi_search_matches", list(DELHI_PRESET_STATIONS)),
+        key=lambda m: (0 if str(m.aqi_raw).isdigit() else 1, m.station_name),
+    )
     selected_feed_target = cleaned_city
 
     if matches:
-        option_labels = [
-            f"{m.station_name} (Reported AQI: {m.aqi_raw})"
-            if m.uid is None
-            else f"{m.station_name} — Station ID @{m.uid} (Reported AQI: {m.aqi_raw})"
-            for m in matches
-        ]
+        option_labels = [m.station_name for m in matches]
         chosen_idx = st.selectbox(
             "Select Place / Monitoring Station in Delhi (or Search Results)",
             options=list(range(len(option_labels))),
@@ -261,23 +247,25 @@ def main() -> None:
         else:
             selected_feed_target = chosen.station_name
 
-    if refresh_clicked:
-        _cached_fetch_city_aqi.clear()
-        fetch_clicked = True
+    auto_live = st.toggle("Enable Live Auto-Refresh (every 2 hours)", value=False, key="live_auto_refresh_toggle")
 
-    if fetch_clicked:
-        try:
-            reading, fetched_utc = _cached_fetch_city_aqi(selected_feed_target, token_fp)
-            st.session_state["waqi_last_reading"] = reading
-            st.session_state["waqi_last_fetched_utc"] = fetched_utc
-            st.session_state["waqi_last_was_cached"] = False
+    explicit_refresh = fetch_clicked or refresh_clicked or auto_live
+    initial_load = "waqi_last_reading" not in st.session_state and config.has_api_token
 
-            persist_key = f"{reading.station_name or reading.query}::{reading.observation_time}"
-            persisted_keys: set[str] = st.session_state.setdefault("persisted_obs_keys", set())
-            if persist_key not in persisted_keys:
+    if explicit_refresh or initial_load:
+        with st.spinner(f"Fetching current live telemetry for {selected_feed_target} from WAQI..."):
+            try:
+                client = WaqiClient(app_config=config)
+                reading = client.get_city_aqi(selected_feed_target)
+                fetched_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+                st.session_state["waqi_last_reading"] = reading
+                st.session_state["waqi_last_fetched_utc"] = fetched_utc
+                st.session_state["waqi_last_fetched_at"] = fetched_utc
+                st.session_state["waqi_last_was_cached"] = False
+
                 try:
                     obs_id, was_inserted = save_observation_bundle(reading)
-                    persisted_keys.add(persist_key)
                     if was_inserted:
                         prior_obs = get_observations(
                             location=reading.station_name or reading.query,
@@ -288,15 +276,20 @@ def main() -> None:
                             previous_observations=prior_obs[:-1] if len(prior_obs) > 1 else [],
                         )
                         persist_alerts(alert_cands, query_city=reading.query)
-                    st.session_state["last_persisted_status"] = (
-                        f"Saved new observation #{obs_id} to SQLite."
-                        if was_inserted
-                        else f"Observation already stored in SQLite (record #{obs_id}); duplicate skipped."
-                    )
+                        st.session_state["last_persisted_status"] = (
+                            f"Saved new live observation #{obs_id} to SQLite."
+                        )
+                    else:
+                        st.session_state["last_persisted_status"] = (
+                            f"Live API checked; station observation #{obs_id} is already up to date in SQLite."
+                        )
                 except DatabaseError as db_exc:
                     st.error(f"Database persistence error: {db_exc.message}")
-        except WaqiClientError as exc:
-            st.error(f"Live AQI fetch failed ({exc.kind.value}): {exc.message}")
+
+                if explicit_refresh:
+                    st.toast(f"Updated live AQI for {reading.station_name or selected_feed_target}")
+            except WaqiClientError as exc:
+                st.error(f"WAQI fetch failed ({exc.kind.value}): {exc.message}")
 
     last_reading: AqiReading | None = st.session_state.get("waqi_last_reading")
     last_fetched_utc: str | None = st.session_state.get("waqi_last_fetched_utc")
@@ -312,6 +305,10 @@ def main() -> None:
             body="Select a monitoring station above and click 'Fetch Live AQI' or search any city keyword.",
             is_placeholder=False,
         )
+
+    if auto_live:
+        time.sleep(7200)
+        st.rerun()
 
 
 main()

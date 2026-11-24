@@ -66,6 +66,23 @@ def classify_intent(user_query: str) -> QueryIntent:
     return QueryIntent.ENVIRONMENTAL_KNOWLEDGE
 
 
+def _attach_live_baseline(facts: dict[str, Any], current_reading: AqiReading | None) -> None:
+    if current_reading is None:
+        return
+    eng = evaluate_aqi_from_reading(current_reading)
+    adv = generate_health_advisory(category=eng.category, dominant_pollutant=eng.dominant_pollutant)
+    facts["active_station_baseline"] = {
+        "station_name": current_reading.station_name or current_reading.query,
+        "observation_time": current_reading.observation_time,
+        "calculated_cpcb_aqi": eng.calculated_aqi,
+        "cpcb_category": eng.category,
+        "dominant_pollutant": eng.dominant_pollutant,
+        "waqi_reported_aqi": current_reading.aqi,
+        "pollutant_concentrations": current_reading.pollutants,
+        "advisory_urgency": adv.urgency_level,
+    }
+
+
 def route_query_to_services(
     user_query: str,
     current_reading: AqiReading | None = None,
@@ -83,6 +100,7 @@ def route_query_to_services(
     )
 
     facts: dict[str, Any] = {"intent": intent.value}
+    _attach_live_baseline(facts, current_reading)
 
     if intent == QueryIntent.CURRENT_AQI:
         if current_reading is None:
