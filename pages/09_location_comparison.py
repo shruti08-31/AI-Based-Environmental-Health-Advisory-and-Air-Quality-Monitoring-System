@@ -1,4 +1,5 @@
 import html
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -18,11 +19,34 @@ _POLLUTANT_BAR_COLORS: dict[str, str] = {
 }
 
 
+def _severity_badge_style(severity: str | None) -> tuple[str, str, str]:
+    sev = (severity or "").strip().lower()
+    if "good" in sev:
+        return "#DCFCE7", "#166534", "#86EFAC"
+    if "moderate" in sev:
+        return "#FEF9C3", "#854D0E", "#FDE047"
+    if "sensitive" in sev or "poor" in sev:
+        return "#FFEDD5", "#9A3412", "#FDBA74"
+    if "unhealthy" in sev or "very" in sev or "severe" in sev or "hazardous" in sev:
+        return "#FEE2E2", "#991B1B", "#FCA5A5"
+    return "#EDF2F7", "#334155", "#CBD5E1"
+
+
+def _clean_location_label(raw_name: str) -> str:
+    """Remove duplicate consecutive segments such as 'Delhi, Delhi'."""
+    parts = [part.strip() for part in str(raw_name).split(",") if part.strip()]
+    cleaned: list[str] = []
+    for part in parts:
+        if not cleaned or cleaned[-1].lower() != part.lower():
+            cleaned.append(part)
+    return ", ".join(cleaned) if cleaned else str(raw_name).strip()
+
+
 def _inject_location_comp_theme() -> None:
     st.markdown(
         """
         <style>
-        /* Remove Streamlit's default top dark header bar */
+        /* Hide default Streamlit chrome */
         [data-testid="stHeader"],
         header[data-testid="stHeader"],
         [data-testid="stDecoration"],
@@ -32,19 +56,19 @@ def _inject_location_comp_theme() -> None:
 
         /* Main canvas & typography */
         .stApp {
-            background-color: #F7F9F8;
+            background-color: #F4F7F5;
             color: #16261E;
         }
         .block-container {
-            padding-top: 1.25rem !important;
+            padding-top: 1.15rem !important;
             padding-bottom: 2.5rem;
             max-width: 1280px;
         }
 
         /* Deep forest-green sidebar */
         [data-testid="stSidebar"] {
-            background-color: #133A2A !important;
-            border-right: 1px solid #0E2C20;
+            background-color: #0E3B2E !important;
+            border-right: 1px solid #092920;
         }
         [data-testid="stSidebar"] * {
             color: #E2ECE6 !important;
@@ -58,135 +82,198 @@ def _inject_location_comp_theme() -> None:
             background-color: rgba(255, 255, 255, 0.08) !important;
         }
         [data-testid="stSidebar"] [data-testid="stSidebarNavLink"][aria-current="page"] {
-            background-color: #315B48 !important;
+            background-color: #275A49 !important;
             font-weight: 600;
         }
 
-        /* Green label & light-green multiselect box with crisp dark-green text */
-        [data-testid="stMultiSelect"] label,
-        [data-testid="stMultiSelect"] label p {
-            color: #1B5E3F !important;
-            font-weight: 600 !important;
-            font-size: 0.88rem !important;
+        /* Top header row */
+        .eco-header-title {
+            font-size: 1.45rem;
+            font-weight: 700;
+            color: #132A20;
+            line-height: 1.2;
+            margin: 0;
         }
-        div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
-            background-color: #EAF4EC !important;
-            border-color: #B4D6BE !important;
-            border-radius: 10px !important;
-        }
-        div[data-testid="stMultiSelect"] div[data-baseweb="select"] span[data-baseweb="tag"] {
-            background-color: #D4E9DA !important;
-            color: #133A2A !important;
-            border: 1px solid #A7CEB4 !important;
-        }
-        div[data-testid="stMultiSelect"] div[data-baseweb="select"] span[data-baseweb="tag"] *,
-        div[data-testid="stMultiSelect"] div[data-baseweb="select"] input {
-            color: #133A2A !important;
-            -webkit-text-fill-color: #133A2A !important;
-            opacity: 1 !important;
-            font-weight: 600 !important;
-        }
-        div[data-testid="stMultiSelect"] div[data-baseweb="select"] svg {
-            color: #133A2A !important;
-            fill: #133A2A !important;
+        .eco-header-sub {
+            font-size: 0.82rem;
+            color: #6B7E74;
+            margin-top: 2px;
         }
 
-        /* Breadcrumb & Top Bar */
-        .eco-topbar {
+        /* Selectbox & multiselect dropdown styling */
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+        div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
+            background-color: #FFFFFF !important;
+            border-color: #CFE0D6 !important;
+            border-radius: 10px !important;
+            min-height: 40px !important;
+        }
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
+            color: #16261E !important;
+            font-size: 0.84rem !important;
+        }
+        div[data-testid="stMultiSelect"] div[data-baseweb="select"] span[data-baseweb="tag"] {
+            background-color: #E3F1E8 !important;
+            color: #0E3B2E !important;
+            border: 1px solid #B5D5C1 !important;
+            border-radius: 999px !important;
+            padding: 2px 10px !important;
+        }
+        div[data-testid="stMultiSelect"] div[data-baseweb="select"] span[data-baseweb="tag"] * {
+            color: #0E3B2E !important;
+            -webkit-text-fill-color: #0E3B2E !important;
+            opacity: 1 !important;
+            font-size: 0.78rem !important;
+            font-weight: 600 !important;
+        }
+        div[data-testid="stMultiSelect"] div[data-baseweb="select"] input {
+            color: #16261E !important;
+            -webkit-text-fill-color: #16261E !important;
+        }
+        div[data-testid="stMultiSelect"] div[data-baseweb="select"] span[data-baseweb="tag"] svg {
+            color: #0E3B2E !important;
+            fill: #0E3B2E !important;
+        }
+
+        /* Surface cards matching screenshot */
+        .eco-surface-card {
+            background: #FFFFFF;
+            border: 1px solid #E2EAE5;
+            border-radius: 12px;
+            padding: 16px 20px;
+            box-shadow: 0 1px 3px rgba(15, 59, 46, 0.03);
+            margin-bottom: 14px;
+        }
+        .eco-selector-title {
+            font-size: 0.90rem;
+            font-weight: 700;
+            color: #16261E;
+            margin-bottom: 8px;
+        }
+
+        /* Top highlight cards (Highest / Lowest AQI Location) */
+        .eco-highlight-card {
+            background: #FFFFFF;
+            border: 1px solid #E2EAE5;
+            border-radius: 12px;
+            padding: 16px 20px;
+            box-shadow: 0 1px 3px rgba(15, 59, 46, 0.03);
+            height: 100%;
+        }
+        .eco-highlight-top {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 0.9rem;
-            padding-bottom: 0.6rem;
-            border-bottom: 1px solid #E4ECE7;
+            margin-bottom: 10px;
         }
-        .eco-breadcrumb {
-            font-size: 0.92rem;
-            color: #5E7167;
+        .eco-highlight-label {
+            font-size: 0.80rem;
+            color: #6B7E74;
+            font-weight: 500;
         }
-        .eco-breadcrumb strong {
-            color: #16261E;
-            font-weight: 600;
-        }
-        .eco-sub {
-            font-size: 0.78rem;
-            color: #74877D;
-            margin-top: 2px;
-        }
-        .eco-pill {
-            background: #EAF3EC;
-            border: 1px solid #CBE0D1;
-            border-radius: 999px;
-            padding: 5px 13px;
-            font-size: 0.78rem;
-            font-weight: 600;
-            color: #1A4D38;
-        }
-        .eco-dot {
-            display: inline-block;
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background-color: #22A06B;
-            margin-right: 6px;
+        .eco-highlight-value {
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: #132A20;
+            line-height: 1.25;
         }
 
-        /* KPI Cards */
-        .eco-card {
+        /* Severity pill badge */
+        .eco-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            border: 1px solid transparent;
+            white-space: nowrap;
+        }
+
+        /* Summary card */
+        .eco-summary-title {
+            font-size: 0.88rem;
+            font-weight: 700;
+            color: #16261E;
+            margin-bottom: 4px;
+        }
+        .eco-summary-text {
+            font-size: 0.84rem;
+            color: #4A5D53;
+            line-height: 1.45;
+        }
+
+        /* Per-city mini cards */
+        .eco-city-card {
             background: #FFFFFF;
-            border: 1px solid #E3ECE6;
-            border-radius: 16px;
-            padding: 16px 18px;
-            box-shadow: 0 2px 8px rgba(19, 58, 42, 0.03);
+            border: 1px solid #E2EAE5;
+            border-radius: 12px;
+            padding: 15px 18px;
+            box-shadow: 0 1px 3px rgba(15, 59, 46, 0.03);
             height: 100%;
         }
-        .eco-card-label {
-            font-size: 0.80rem;
-            font-weight: 500;
-            color: #5E7167;
-            margin-bottom: 8px;
+        .eco-city-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 8px;
+            margin-bottom: 14px;
         }
-        .eco-card-value {
-            font-size: 1.7rem;
-            font-weight: 700;
-            color: #133A2A;
-            line-height: 1.15;
+        .eco-city-name {
+            font-size: 0.86rem;
+            font-weight: 600;
+            color: #4A5D53;
+        }
+        .eco-city-aqi-row {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
             margin-bottom: 6px;
         }
-        .eco-card-sub {
-            font-size: 0.77rem;
-            color: #6B7E74;
+        .eco-city-aqi-num {
+            font-size: 1.65rem;
+            font-weight: 700;
+            color: #132A20;
+            line-height: 1.1;
+        }
+        .eco-city-aqi-unit {
+            font-size: 0.74rem;
+            font-weight: 600;
+            color: #7A8D83;
+            text-transform: uppercase;
+        }
+        .eco-city-sub {
+            font-size: 0.76rem;
+            color: #7A8D83;
         }
 
-        /* Section Title & Note Panel */
+        /* Section headers & chart cards */
         .eco-section-title {
-            font-size: 1.02rem;
+            font-size: 1.0rem;
             font-weight: 700;
             color: #133A2A;
-            margin: 1.05rem 0 0.65rem 0;
+            margin: 1.1rem 0 0.6rem 0;
         }
         .eco-panel {
             background: #FFFFFF;
             border: 1px solid #E3ECE6;
-            border-left: 4px solid #133A2A;
-            border-radius: 14px;
-            padding: 15px 18px;
-            margin-top: 0.75rem;
-            box-shadow: 0 2px 6px rgba(19, 58, 42, 0.025);
+            border-left: 4px solid #0E3B2E;
+            border-radius: 12px;
+            padding: 14px 18px;
+            margin-top: 0.85rem;
+            box-shadow: 0 1px 3px rgba(15, 59, 46, 0.025);
         }
         .eco-panel-title {
-            font-size: 0.92rem;
+            font-size: 0.90rem;
             font-weight: 700;
             color: #133A2A;
             margin-bottom: 4px;
         }
         .eco-panel-body {
-            font-size: 0.85rem;
+            font-size: 0.84rem;
             color: #2D4238;
             line-height: 1.5;
         }
 
-        /* Seamless chart containers */
         [data-testid="stPlotlyChart"],
         [data-testid="stPlotlyChart"] > div {
             background: transparent !important;
@@ -206,12 +293,12 @@ def _apply_eco_chart_layout(
 ) -> None:
     layout_kwargs: dict[str, object] = {
         "height": height,
-        "margin": {"l": 44, "r": 20, "t": 24, "b": 42},
+        "margin": {"l": 44, "r": 20, "t": 20, "b": 42},
         "paper_bgcolor": "rgba(0,0,0,0)",
         "plot_bgcolor": "rgba(0,0,0,0)",
         "font": {"color": "#133A2A"},
         "legend": {
-            "bgcolor": "rgba(255,255,255,0.75)",
+            "bgcolor": "rgba(255,255,255,0.85)",
             "bordercolor": "#DCE8E0",
             "borderwidth": 1,
             "font": {"color": "#133A2A", "size": 11},
@@ -220,14 +307,14 @@ def _apply_eco_chart_layout(
             "title": {"text": x_title, "font": {"color": "#133A2A", "size": 12}},
             "tickfont": {"color": "#133A2A", "size": 11},
             "showgrid": False,
-            "linecolor": "#B8CFC1",
+            "linecolor": "#C8D8CE",
         },
         "yaxis": {
             "title": {"text": y_title, "font": {"color": "#133A2A", "size": 12}},
             "tickfont": {"color": "#133A2A", "size": 11},
-            "gridcolor": "#DFEAE3",
-            "linecolor": "#B8CFC1",
-            "zerolinecolor": "#9BBAA6",
+            "gridcolor": "#E6EFE9",
+            "linecolor": "#C8D8CE",
+            "zerolinecolor": "#B2C8BA",
         },
     }
     if barmode:
@@ -235,38 +322,131 @@ def _apply_eco_chart_layout(
     fig.update_layout(**layout_kwargs)
 
 
+def _render_badge(label: str) -> str:
+    bg, fg, border = _severity_badge_style(label)
+    return (
+        f'<span class="eco-badge" style="background:{bg};color:{fg};border-color:{border};">'
+        f"{html.escape(label)}</span>"
+    )
+
+
+def _prepare_observations(
+    latest_per_station: list[dict],
+) -> tuple[list[dict], list[str], dict[str, str]]:
+    """
+    Clean duplicate city/region segments (e.g., 'Delhi, Delhi' -> 'Delhi')
+    without adding station numbers, while preserving all rows from SQLite.
+    """
+    prepared: list[dict] = []
+    display_to_raw: dict[str, str] = {}
+    unique_labels: list[str] = []
+
+    for item in latest_per_station:
+        raw_name = str(item.get("station_name", "Unknown Station"))
+        cleaned_label = _clean_location_label(raw_name)
+
+        cloned = dict(item)
+        cloned["station_name"] = cleaned_label
+        prepared.append(cloned)
+
+        if cleaned_label not in display_to_raw:
+            display_to_raw[cleaned_label] = raw_name
+            unique_labels.append(cleaned_label)
+
+    return prepared, unique_labels, display_to_raw
+
+
+def _extract_severity_for_station(
+    comparison_df: pd.DataFrame,
+    station_name: str | None,
+    fallback_list: list[str],
+) -> str:
+    if not station_name:
+        return fallback_list[0] if fallback_list else "Unknown"
+    if "Station" in comparison_df.columns:
+        matched = comparison_df[comparison_df["Station"] == station_name]
+        for col in ("Severity", "Category", "AQI Category", "Severity Tier"):
+            if col in matched.columns and not matched[col].dropna().empty:
+                return str(matched[col].dropna().iloc[0])
+    return fallback_list[0] if fallback_list else "N/A"
+
+
+def _build_comparison_summary(comp, highest_sev: str, lowest_sev: str) -> str:
+    if (
+        comp.highest_aqi_station
+        and comp.lowest_aqi_station
+        and comp.highest_aqi_value is not None
+        and comp.lowest_aqi_value is not None
+    ):
+        try:
+            diff = round(float(comp.highest_aqi_value) - float(comp.lowest_aqi_value), 1)
+            diff_str = f"{int(diff)}" if diff.is_integer() else f"{diff}"
+            return (
+                f"{comp.highest_aqi_station} currently has the highest pollution burden "
+                f"(AQI {comp.highest_aqi_value}, {highest_sev}), which is {diff_str} AQI points "
+                f"higher than {comp.lowest_aqi_station} (AQI {comp.lowest_aqi_value}, {lowest_sev})."
+            )
+        except (TypeError, ValueError):
+            pass
+    sev_meta = ", ".join(comp.available_severities) if comp.available_severities else "None"
+    return (
+        f"Comparing {comp.stations_compared} selected station(s) using latest stored observations. "
+        f"Present severity categories: {sev_meta}."
+    )
+
+
 def main() -> None:
     _inject_location_comp_theme()
 
-    st.markdown(
-        """
-        <div class="eco-topbar">
-            <div>
-                <div class="eco-breadcrumb">EcoHealth &nbsp;/&nbsp; <strong>Location Comparison</strong></div>
-                <div class="eco-sub">Compare AQI, pollutants, severity tiers, and observation timestamps across stored stations.</div>
-            </div>
-            <div class="eco-pill">
-                <span class="eco-dot"></span>Multi-Station View
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    raw_latest = get_latest_observations_per_station()
+    prepared_obs, all_station_names, display_to_raw = _prepare_observations(
+        raw_latest if raw_latest else []
     )
 
-    latest_per_station = get_latest_observations_per_station()
-    if not latest_per_station:
+    hdr_left, hdr_right = st.columns([4.5, 1.8], vertical_alignment="center")
+    with hdr_left:
+        st.markdown(
+            """
+            <div>
+                <div class="eco-header-title">Location Comparison</div>
+                <div class="eco-header-sub">Environmental Health Advisory &amp; Monitoring System</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with hdr_right:
+        if all_station_names:
+            st.selectbox(
+                "Focus Station",
+                options=all_station_names,
+                key="location_comparison_focus_station",
+                label_visibility="collapsed",
+            )
+
+    if not prepared_obs:
         render_warning_banner(
             "No stored station observations found in SQLite. Fetch readings for one or more cities on 'Live AQI Monitoring' first.",
             is_placeholder=False,
         )
         return
 
-    all_station_names = [str(item["station_name"]) for item in latest_per_station]
+    default_two = all_station_names[:2]
+
+    st.markdown(
+        """
+        <div class="eco-surface-card" style="margin-bottom: 6px;">
+            <div class="eco-selector-title">Select Locations to Compare (Min 2)</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     selected_stations = st.multiselect(
-        "Select Stations / Cities to Compare",
+        "Select Locations to Compare (Min 2)",
         options=all_station_names,
-        default=all_station_names,
+        default=default_two,
+        placeholder="Choose locations from dropdown...",
         key="location_comparison_multiselect",
+        label_visibility="collapsed",
     )
 
     if not selected_stations:
@@ -274,7 +454,7 @@ def main() -> None:
         return
 
     comp = compare_station_observations(
-        latest_observations=latest_per_station,
+        latest_observations=prepared_obs,
         selected_stations=selected_stations,
     )
 
@@ -294,53 +474,108 @@ def main() -> None:
 
     highest_val_str = str(comp.highest_aqi_value) if comp.highest_aqi_value is not None else "N/A"
     lowest_val_str = str(comp.lowest_aqi_value) if comp.lowest_aqi_value is not None else "N/A"
-    sev_meta = ", ".join(comp.available_severities) if comp.available_severities else "None"
+    highest_station_str = comp.highest_aqi_station or "No valid AQI"
+    lowest_station_str = comp.lowest_aqi_station or "No valid AQI"
 
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
+    highest_sev = _extract_severity_for_station(
+        comp.comparison_df, comp.highest_aqi_station, comp.available_severities
+    )
+    lowest_sev = _extract_severity_for_station(
+        comp.comparison_df, comp.lowest_aqi_station, comp.available_severities
+    )
+
+    hi_col, lo_col = st.columns(2)
+    with hi_col:
         st.markdown(
             f"""
-            <div class="eco-card" style="border-top:4px solid #133A2A;">
-                <div class="eco-card-label">Stations Compared</div>
-                <div class="eco-card-value">{comp.stations_compared}</div>
-                <div class="eco-card-sub">Latest stored observation per station</div>
+            <div class="eco-highlight-card">
+                <div class="eco-highlight-top">
+                    <span class="eco-highlight-label">Highest AQI Location</span>
+                    {_render_badge(highest_sev)}
+                </div>
+                <div class="eco-highlight-value">
+                    {html.escape(highest_station_str)} ({html.escape(highest_val_str)})
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-    with m2:
+    with lo_col:
         st.markdown(
             f"""
-            <div class="eco-card" style="border-top:4px solid #DC2626;">
-                <div class="eco-card-label">Highest Available AQI</div>
-                <div class="eco-card-value" style="color:#DC2626;">{html.escape(highest_val_str)}</div>
-                <div class="eco-card-sub">{html.escape(comp.highest_aqi_station or "No valid AQI")}</div>
+            <div class="eco-highlight-card">
+                <div class="eco-highlight-top">
+                    <span class="eco-highlight-label">Lowest AQI Location</span>
+                    {_render_badge(lowest_sev)}
+                </div>
+                <div class="eco-highlight-value">
+                    {html.escape(lowest_station_str)} ({html.escape(lowest_val_str)})
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-    with m3:
-        st.markdown(
-            f"""
-            <div class="eco-card" style="border-top:4px solid #1F7A5A;">
-                <div class="eco-card-label">Lowest Available AQI</div>
-                <div class="eco-card-value" style="color:#1F7A5A;">{html.escape(lowest_val_str)}</div>
-                <div class="eco-card-sub">{html.escape(comp.lowest_aqi_station or "No valid AQI")}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with m4:
-        st.markdown(
-            f"""
-            <div class="eco-card" style="border-top:4px solid #D97706;">
-                <div class="eco-card-label">Severity Categories Present</div>
-                <div class="eco-card-value">{len(comp.available_severities)}</div>
-                <div class="eco-card-sub">{html.escape(sev_meta)}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+
+    summary_text = _build_comparison_summary(comp, highest_sev, lowest_sev)
+    st.markdown(
+        f"""
+        <div class="eco-surface-card" style="margin-top: 12px;">
+            <div class="eco-summary-title">Comparison Summary</div>
+            <div class="eco-summary-text">{html.escape(summary_text)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Per-station cards row (3 per row)
+    df = comp.comparison_df
+    if not df.empty and "Station" in df.columns:
+        rows_data = df.to_dict(orient="records")
+        for row_start in range(0, len(rows_data), 3):
+            chunk = rows_data[row_start : row_start + 3]
+            card_cols = st.columns(3)
+            for idx, rec in enumerate(chunk):
+                st_name = _clean_location_label(str(rec.get("Station", "Station")))
+                aqi_val = rec.get("Calculated AQI (CPCB)")
+                if pd.isna(aqi_val):
+                    aqi_val = rec.get("WAQI API AQI")
+                aqi_display = "N/A" if aqi_val is None or pd.isna(aqi_val) else str(aqi_val)
+
+                sev_val = None
+                for k in ("Severity", "Category", "AQI Category", "Severity Tier"):
+                    if k in rec and rec[k] is not None and not pd.isna(rec[k]):
+                        sev_val = str(rec[k])
+                        break
+                sev_label = sev_val or (
+                    comp.available_severities[0] if comp.available_severities else "Observed"
+                )
+
+                pm25_val = rec.get("PM25")
+                if pm25_val is not None and not pd.isna(pm25_val):
+                    sub_line = f"PM2.5: {pm25_val} µg/m³"
+                else:
+                    ts_val = rec.get("Observation Timestamp") or rec.get("Timestamp") or ""
+                    sub_line = f"Stations compared: {comp.stations_compared}" + (
+                        f" • {ts_val}" if ts_val else ""
+                    )
+
+                with card_cols[idx]:
+                    st.markdown(
+                        f"""
+                        <div class="eco-city-card">
+                            <div class="eco-city-header">
+                                <span class="eco-city-name">{html.escape(st_name)}</span>
+                                {_render_badge(sev_label)}
+                            </div>
+                            <div class="eco-city-aqi-row">
+                                <span class="eco-city-aqi-num">{html.escape(aqi_display)}</span>
+                                <span class="eco-city-aqi-unit">AQI</span>
+                            </div>
+                            <div class="eco-city-sub">{html.escape(sub_line)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
     c_left, c_right = st.columns(2)
     with c_left:
@@ -352,7 +587,7 @@ def main() -> None:
                     x=comp.comparison_df["Station"],
                     y=comp.comparison_df["Calculated AQI (CPCB)"],
                     name="Calculated AQI (CPCB)",
-                    marker_color="#133A2A",
+                    marker_color="#0E3B2E",
                 )
             )
             fig_aqi.add_trace(
@@ -374,7 +609,7 @@ def main() -> None:
 
     with c_right:
         with st.container(border=True):
-            st.markdown("**Pollutant Comparison Across Locations**")
+            st.markdown("**Pollutant & AQI Comparison Chart**")
             fig_pol = go.Figure()
             for key in POLLUTANT_KEYS:
                 col_name = key.upper()
@@ -396,12 +631,20 @@ def main() -> None:
             )
             st.plotly_chart(fig_pol, width="stretch", key="loc_comp_pollutant_bar")
 
-    st.markdown('<div class="eco-section-title">Station Comparison Table (With Observation Timestamps)</div>', unsafe_allow_html=True)
-    st.dataframe(comp.comparison_df, width="stretch", hide_index=True)
+    st.markdown(
+        '<div class="eco-section-title">Station Comparison Table (With Observation Timestamps)</div>',
+        unsafe_allow_html=True,
+    )
+    table_df = comp.comparison_df.copy()
+    if "Station" in table_df.columns and display_to_raw:
+        table_df["Raw Station Name"] = table_df["Station"].map(
+            lambda s: display_to_raw.get(str(s), str(s))
+        )
+    st.dataframe(table_df, width="stretch", hide_index=True)
 
     st.markdown(
         """
-        <div class="eco-panel" style="border-left-color:#133A2A;">
+        <div class="eco-panel" style="border-left-color:#0E3B2E;">
             <div class="eco-panel-title">Comparison Integrity Note</div>
             <div class="eco-panel-body">
                 Every compared station displays its exact observation timestamp and freshness status.

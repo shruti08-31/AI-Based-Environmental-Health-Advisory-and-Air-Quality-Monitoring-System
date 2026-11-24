@@ -41,7 +41,7 @@ def _inject_assistant_gemini_theme() -> None:
         }
         .block-container {
             padding-top: 1.2rem !important;
-            padding-bottom: 6.5rem !important;
+            padding-bottom: 7.2rem !important;
             max-width: 980px;
         }
 
@@ -156,23 +156,78 @@ def _inject_assistant_gemini_theme() -> None:
 
         /* Chat Message Styling (Gemini-like clean bubbles) */
         [data-testid="stChatMessage"] {
-            background-color: #FFFFFF;
-            border: 1px solid #E3ECE6;
-            border-radius: 18px;
-            padding: 16px 20px;
-            margin-bottom: 0.85rem;
-            box-shadow: 0 2px 8px rgba(19, 58, 42, 0.03);
+            background-color: #FFFFFF !important;
+            border: 1px solid #DCE7E0 !important;
+            border-radius: 18px !important;
+            padding: 16px 20px !important;
+            margin-bottom: 0.85rem !important;
+            box-shadow: 0 2px 8px rgba(19, 58, 42, 0.04) !important;
+            opacity: 1 !important;
+            filter: none !important;
         }
+        [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"],
         [data-testid="stChatMessage"] p,
         [data-testid="stChatMessage"] li,
-        [data-testid="stChatMessage"] span {
+        [data-testid="stChatMessage"] span,
+        [data-testid="stChatMessage"] strong,
+        [data-testid="stChatMessage"] em,
+        [data-testid="stChatMessage"] h1,
+        [data-testid="stChatMessage"] h2,
+        [data-testid="stChatMessage"] h3,
+        [data-testid="stChatMessage"] h4 {
             color: #16261E !important;
+            opacity: 1 !important;
+            -webkit-text-fill-color: #16261E !important;
             line-height: 1.6;
         }
-        [data-testid="stChatMessage"] a {
+
+        /* Crisp Markdown Tables inside Chat Messages */
+        [data-testid="stChatMessage"] table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+            background-color: #FFFFFF !important;
+            color: #16261E !important;
+            margin: 12px 0 !important;
+            border: 1px solid #C9DBD0 !important;
+            border-radius: 10px !important;
+            overflow: hidden !important;
+        }
+        [data-testid="stChatMessage"] thead,
+        [data-testid="stChatMessage"] thead tr,
+        [data-testid="stChatMessage"] th {
+            background-color: #E7F2EA !important;
+            color: #133A2A !important;
+            -webkit-text-fill-color: #133A2A !important;
+            font-weight: 700 !important;
+            border: 1px solid #C9DBD0 !important;
+            padding: 10px 12px !important;
+            text-align: left !important;
+        }
+        [data-testid="stChatMessage"] tbody tr {
+            background-color: #FFFFFF !important;
+        }
+        [data-testid="stChatMessage"] tbody tr:nth-child(even) {
+            background-color: #F5F9F6 !important;
+        }
+        [data-testid="stChatMessage"] td,
+        [data-testid="stChatMessage"] td p,
+        [data-testid="stChatMessage"] td span,
+        [data-testid="stChatMessage"] td strong,
+        [data-testid="stChatMessage"] td em {
+            background-color: transparent !important;
+            color: #16261E !important;
+            -webkit-text-fill-color: #16261E !important;
+            border: 1px solid #DCE7E0 !important;
+            padding: 10px 12px !important;
+            vertical-align: top !important;
+        }
+
+        [data-testid="stChatMessage"] a,
+        [data-testid="stChatMessage"] td a {
             color: #1B6B4A !important;
-            font-weight: 600;
-            text-decoration: underline;
+            -webkit-text-fill-color: #1B6B4A !important;
+            font-weight: 600 !important;
+            text-decoration: underline !important;
         }
 
         /* Metadata badge row inside assistant bubble */
@@ -191,29 +246,42 @@ def _inject_assistant_gemini_theme() -> None:
             padding: 2px 10px;
             font-size: 0.72rem;
             font-weight: 600;
-            color: #2B4C3C;
+            color: #2B4C3C !important;
+            -webkit-text-fill-color: #2B4C3C !important;
         }
 
-        /* Bottom Chat Input Container (light green pill bar) */
+        /* Bottom Chat Input Container (high-contrast light green pill bar) */
         [data-testid="stBottom"],
-        [data-testid="stBottom"] > div {
+        [data-testid="stBottom"] > div,
+        [data-testid="stBottom"] > div > div {
             background-color: #F7F9F8 !important;
+            border-top: none !important;
+        }
+        [data-testid="stChatInput"],
+        [data-testid="stChatInput"] > div,
+        [data-testid="stChatInput"] form {
+            background-color: #EAF4EC !important;
+            color: #133A2A !important;
+            border-radius: 26px !important;
         }
         [data-testid="stChatInput"] {
-            background-color: #EAF4EC !important;
-            border: 1.5px solid #B4D6BE !important;
-            border-radius: 26px !important;
-            box-shadow: 0 4px 16px rgba(19, 58, 42, 0.07) !important;
+            border: 1.5px solid #8BBF9C !important;
+            box-shadow: 0 4px 16px rgba(19, 58, 42, 0.10) !important;
+            padding: 2px 6px !important;
         }
         [data-testid="stChatInput"] textarea {
-            background-color: transparent !important;
+            background-color: #EAF4EC !important;
             color: #133A2A !important;
             -webkit-text-fill-color: #133A2A !important;
+            caret-color: #133A2A !important;
             font-weight: 500 !important;
+            font-size: 0.95rem !important;
+            opacity: 1 !important;
         }
         [data-testid="stChatInput"] textarea::placeholder {
-            color: #547363 !important;
-            -webkit-text-fill-color: #547363 !important;
+            color: #3D5E4D !important;
+            -webkit-text-fill-color: #3D5E4D !important;
+            opacity: 1 !important;
         }
         [data-testid="stChatInput"] button {
             background-color: #133A2A !important;
@@ -235,6 +303,7 @@ def _inject_assistant_gemini_theme() -> None:
         [data-testid="stExpander"] summary,
         [data-testid="stExpander"] summary p {
             color: #1B5E3F !important;
+            -webkit-text-fill-color: #1B5E3F !important;
             font-weight: 600 !important;
             font-size: 0.80rem !important;
         }
