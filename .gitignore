@@ -1,0 +1,29 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables & secrets
+.env
+*.pem
+*.key
+
+# Local SQLite databases, trained models, and generated FAISS artifacts
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.joblib
+data/rag_index/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS & IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
