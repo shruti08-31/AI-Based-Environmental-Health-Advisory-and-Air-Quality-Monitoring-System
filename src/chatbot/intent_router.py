@@ -12,6 +12,7 @@ from src.database import get_latest_observations_per_station, get_observations
 from src.intelligence import analyze_pollutants_from_reading, detect_anomalies, generate_source_insights
 from src.prediction import DEFAULT_MODEL_ARTIFACT_PATH, load_mlp_artifact, predict_next_severity
 from src.rag import RetrievedContext, retrieve_relevant_knowledge
+from src.rag.web_search import WebSourceSnippet, search_trusted_environmental_websites
 
 
 class QueryIntent(str, Enum):
@@ -33,13 +34,14 @@ class RoutedContext:
     structured_facts: dict[str, Any] = field(default_factory=dict)
     deterministic_summary: str = ""
     retrieved_docs: list[RetrievedContext] = field(default_factory=list)
+    web_sources: list[WebSourceSnippet] = field(default_factory=list)
     has_sufficient_evidence: bool = True
 
 
 _INTENT_KEYWORDS: list[tuple[QueryIntent, tuple[str, ...]]] = [
     (QueryIntent.ACTIVITY_RECOMMENDATIONS, ("walk", "walking", "run", "running", "cycl", "exercise", "workout", "jog", "outdoor sport")),
     (QueryIntent.PREDICTION, ("predict", "forecast", "next observation", "tomorrow", "upcoming", "mlp", "future aqi")),
-    (QueryIntent.ANOMALY_EXPLANATION, ("anomaly", "anomalies", "spike", "sudden jump", "unusual", "irregular", "outlier")),
+    (QueryIntent.ANOMALY_EXPLANATION, ("anomal", "spike", "sudden jump", "unusual", "irregular", "outlier")),
     (QueryIntent.LOCATION_COMPARISON, ("compare", "comparison", "versus", "vs ", "which city", "which station", "cleanest", "most polluted")),
     (QueryIntent.HISTORICAL_ANALYSIS, ("history", "historical", "trend", "over time", "daily", "weekly", "past", "average aqi")),
     (QueryIntent.WEATHER_CONTEXT, ("weather", "wind", "humidity", "rain", "rainfall", "temperature", "pressure", "dispersion")),
@@ -54,10 +56,16 @@ def classify_intent(user_query: str) -> QueryIntent:
     if not q.strip():
         return QueryIntent.ENVIRONMENTAL_KNOWLEDGE
 
-    # Knowledge-style conceptual questions ("what is pm2.5", "how does ozone form") route to Environmental knowledge
-    if any(q.lstrip().startswith(prefix) for prefix in ("what is ", "what are ", "how does ", "why does ", "define ", "explain what ")):
-        if "current" not in q and "today" not in q and "station" not in q and "our " not in q:
-            return QueryIntent.ENVIRONMENTAL_KNOWLEDGE
+    is_definitional = any(
+        q.lstrip().startswith(prefix)
+        for prefix in ("what is ", "what are ", "how does ", "why does ", "define ", "explain what ")
+    )
+    has_live_or_data_cue = any(
+        cue in q
+        for cue in ("current", "today", "station", "history", "historical", "trend", "average", "predict", "forecast")
+    )
+    if is_definitional and not has_live_or_data_cue:
+        return QueryIntent.ENVIRONMENTAL_KNOWLEDGE
 
     for intent, keywords in _INTENT_KEYWORDS:
         if any(kw in q for kw in keywords):
@@ -90,6 +98,7 @@ def route_query_to_services(
     model_path: Path | str | None = None,
     kb_dir: Path | str | None = None,
     index_dir: Path | str | None = None,
+    use_web_search: bool = True,
 ) -> RoutedContext:
     intent = classify_intent(user_query)
     retrieved = retrieve_relevant_knowledge(
@@ -98,6 +107,13 @@ def route_query_to_services(
         kb_dir=kb_dir,
         index_dir=index_dir,
     )
+
+    web_hits: list[WebSourceSnippet] = []
+    if use_web_search:
+        topic_parts = [user_query]
+        if current_reading is not None and current_reading.dominant_pollutant:
+            topic_parts.append(current_reading.dominant_pollutant.upper())
+        web_hits = search_trusted_environmental_websites(" ".join(topic_parts), max_sources=4)
 
     facts: dict[str, Any] = {"intent": intent.value}
     _attach_live_baseline(facts, current_reading)
@@ -109,6 +125,7 @@ def route_query_to_services(
                 structured_facts=facts,
                 deterministic_summary="No live AQI observation is currently loaded in session. Fetch a station on 'Live AQI Monitoring' first.",
                 retrieved_docs=retrieved,
+                web_sources=web_hits,
                 has_sufficient_evidence=False,
             )
         eng = evaluate_aqi_from_reading(current_reading)
@@ -130,7 +147,13 @@ def route_query_to_services(
             f"Dominant Pollutant: {(eng.dominant_pollutant or 'None').upper()} | "
             f"WAQI API Reported AQI: {current_reading.aqi}. {eng.category_explanation}"
         )
-        return RoutedContext(intent=intent, structured_facts=facts, deterministic_summary=summary, retrieved_docs=retrieved)
+        return RoutedContext(
+            intent=intent,
+            structured_facts=facts,
+            deterministic_summary=summary,
+            retrieved_docs=retrieved,
+            web_sources=web_hits,
+        )
 
     if intent == QueryIntent.POLLUTANT_ANALYSIS:
         if current_reading is None:
@@ -139,6 +162,7 @@ def route_query_to_services(
                 structured_facts=facts,
                 deterministic_summary="No live pollutant reading is loaded to analyze.",
                 retrieved_docs=retrieved,
+                web_sources=web_hits,
                 has_sufficient_evidence=False,
             )
         analysis = analyze_pollutants_from_reading(current_reading)
@@ -168,7 +192,13 @@ def route_query_to_services(
             f"Missing pollutants (not imputed): {', '.join(p.upper() for p in analysis.missing_pollutants) or 'None'}. "
             f"Possible associated sources (non-causal): {', '.join(top_sources) or 'No elevated multi-pollutant source signature'}."
         )
-        return RoutedContext(intent=intent, structured_facts=facts, deterministic_summary=summary, retrieved_docs=retrieved)
+        return RoutedContext(
+            intent=intent,
+            structured_facts=facts,
+            deterministic_summary=summary,
+            retrieved_docs=retrieved,
+            web_sources=web_hits,
+        )
 
     if intent == QueryIntent.HEALTH_PRECAUTIONS:
         if current_reading is None:
@@ -177,6 +207,7 @@ def route_query_to_services(
                 structured_facts=facts,
                 deterministic_summary="No live AQI observation is loaded; fetch a station reading to evaluate category-specific health precautions.",
                 retrieved_docs=retrieved,
+                web_sources=web_hits,
                 has_sufficient_evidence=False,
             )
         eng = evaluate_aqi_from_reading(current_reading)
@@ -197,7 +228,13 @@ def route_query_to_services(
             f"Sensitive groups: {' '.join(adv.sensitive_group_precautions)} "
             f"Note: {adv.disclaimer}"
         )
-        return RoutedContext(intent=intent, structured_facts=facts, deterministic_summary=summary, retrieved_docs=retrieved)
+        return RoutedContext(
+            intent=intent,
+            structured_facts=facts,
+            deterministic_summary=summary,
+            retrieved_docs=retrieved,
+            web_sources=web_hits,
+        )
 
     if intent == QueryIntent.ACTIVITY_RECOMMENDATIONS:
         if current_reading is None:
@@ -206,6 +243,7 @@ def route_query_to_services(
                 structured_facts=facts,
                 deterministic_summary="No live AQI reading is loaded to evaluate outdoor/indoor activity suitability.",
                 retrieved_docs=retrieved,
+                web_sources=web_hits,
                 has_sufficient_evidence=False,
             )
         q_low = user_query.lower()
@@ -230,7 +268,13 @@ def route_query_to_services(
             f"Recommendation: {guidance.recommendation}. "
             f"Alternative: {guidance.alternative_activity} ({guidance.disclaimer})"
         )
-        return RoutedContext(intent=intent, structured_facts=facts, deterministic_summary=summary, retrieved_docs=retrieved)
+        return RoutedContext(
+            intent=intent,
+            structured_facts=facts,
+            deterministic_summary=summary,
+            retrieved_docs=retrieved,
+            web_sources=web_hits,
+        )
 
     if intent == QueryIntent.HISTORICAL_ANALYSIS:
         obs = get_observations(limit=500, db_path=db_path)
@@ -238,8 +282,12 @@ def route_query_to_services(
             return RoutedContext(
                 intent=intent,
                 structured_facts=facts,
-                deterministic_summary="Insufficient historical data in SQLite; no stored observations found yet.",
+                deterministic_summary=(
+                    "There are no stored historical observations in the database yet to compute a trend. "
+                    "Fetch readings across different times or stations on Live AQI Monitoring to build up history."
+                ),
                 retrieved_docs=retrieved,
+                web_sources=web_hits,
                 has_sufficient_evidence=False,
             )
         hist = compute_historical_analytics(obs)
@@ -263,6 +311,7 @@ def route_query_to_services(
             structured_facts=facts,
             deterministic_summary=summary,
             retrieved_docs=retrieved,
+            web_sources=web_hits,
             has_sufficient_evidence=hist.observation_count >= 1,
         )
 
@@ -274,6 +323,7 @@ def route_query_to_services(
                 structured_facts=facts,
                 deterministic_summary="No stored station observations available in SQLite for location comparison.",
                 retrieved_docs=retrieved,
+                web_sources=web_hits,
                 has_sufficient_evidence=False,
             )
         comp = compare_station_observations(latest)
@@ -293,7 +343,13 @@ def route_query_to_services(
             f"Lowest AQI: {comp.lowest_aqi_station} ({comp.lowest_aqi_value}). "
             + (" ".join(comp.timestamp_warnings) if comp.timestamp_warnings else "")
         )
-        return RoutedContext(intent=intent, structured_facts=facts, deterministic_summary=summary, retrieved_docs=retrieved)
+        return RoutedContext(
+            intent=intent,
+            structured_facts=facts,
+            deterministic_summary=summary,
+            retrieved_docs=retrieved,
+            web_sources=web_hits,
+        )
 
     if intent == QueryIntent.PREDICTION:
         obs = get_observations(limit=500, db_path=db_path)
@@ -304,6 +360,7 @@ def route_query_to_services(
                 structured_facts=facts,
                 deterministic_summary="No trained MLP severity model or historical observations available yet. Train the MLP on 'AQI Prediction' after collecting >= 4 observations.",
                 retrieved_docs=retrieved,
+                web_sources=web_hits,
                 has_sufficient_evidence=False,
             )
         artifact = load_mlp_artifact(m_path)
@@ -326,7 +383,13 @@ def route_query_to_services(
             f"(Confidence: {pred.confidence * 100:.1f}% — {pred.confidence_label}; "
             f"Held-out Test Accuracy: {artifact.evaluation.accuracy * 100:.1f}%)."
         )
-        return RoutedContext(intent=intent, structured_facts=facts, deterministic_summary=summary, retrieved_docs=retrieved)
+        return RoutedContext(
+            intent=intent,
+            structured_facts=facts,
+            deterministic_summary=summary,
+            retrieved_docs=retrieved,
+            web_sources=web_hits,
+        )
 
     if intent == QueryIntent.ANOMALY_EXPLANATION:
         obs = get_observations(limit=500, db_path=db_path)
@@ -336,6 +399,7 @@ def route_query_to_services(
                 structured_facts=facts,
                 deterministic_summary="No stored valid observations available to evaluate statistical anomalies.",
                 retrieved_docs=retrieved,
+                web_sources=web_hits,
                 has_sufficient_evidence=False,
             )
         findings = detect_anomalies(obs)
@@ -354,7 +418,13 @@ def route_query_to_services(
             f"Evaluated {len(findings)} valid observations; {len(flagged)} statistical anomalies flagged. "
             + (f"Latest status ({latest_f.evidence_strength}): {latest_f.explanation}" if latest_f else "")
         )
-        return RoutedContext(intent=intent, structured_facts=facts, deterministic_summary=summary, retrieved_docs=retrieved)
+        return RoutedContext(
+            intent=intent,
+            structured_facts=facts,
+            deterministic_summary=summary,
+            retrieved_docs=retrieved,
+            web_sources=web_hits,
+        )
 
     if intent == QueryIntent.WEATHER_CONTEXT:
         if current_reading is None or current_reading.latitude is None or current_reading.longitude is None:
@@ -363,6 +433,7 @@ def route_query_to_services(
                 structured_facts=facts,
                 deterministic_summary="Station coordinates are unavailable; fetch a station with valid latitude/longitude first.",
                 retrieved_docs=retrieved,
+                web_sources=web_hits,
                 has_sufficient_evidence=False,
             )
         try:
@@ -384,23 +455,31 @@ def route_query_to_services(
                 f"Rain {w_obs.rain_mm} mm, Pressure {w_obs.surface_pressure_hpa} hPa. "
                 + " ".join(n.possible_relationship for n in notes[:2])
             )
-            return RoutedContext(intent=intent, structured_facts=facts, deterministic_summary=summary, retrieved_docs=retrieved)
+            return RoutedContext(
+                intent=intent,
+                structured_facts=facts,
+                deterministic_summary=summary,
+                retrieved_docs=retrieved,
+                web_sources=web_hits,
+            )
         except WeatherClientError as exc:
             return RoutedContext(
                 intent=intent,
                 structured_facts=facts,
                 deterministic_summary=f"Weather service unavailable ({exc.message}); AQI data remains unaffected.",
                 retrieved_docs=retrieved,
+                web_sources=web_hits,
                 has_sufficient_evidence=False,
             )
 
     # Default: Environmental knowledge (RAG-grounded)
-    if not retrieved:
+    if not retrieved and not web_hits:
         return RoutedContext(
             intent=QueryIntent.ENVIRONMENTAL_KNOWLEDGE,
             structured_facts=facts,
-            deterministic_summary="No matching reference passages were retrieved from the curated environmental knowledge base.",
+            deterministic_summary="No matching reference passages were retrieved from the curated environmental knowledge base or trusted web sources.",
             retrieved_docs=[],
+            web_sources=[],
             has_sufficient_evidence=False,
         )
 
@@ -410,5 +489,6 @@ def route_query_to_services(
         structured_facts=facts,
         deterministic_summary=kb_summary,
         retrieved_docs=retrieved,
+        web_sources=web_hits,
         has_sufficient_evidence=True,
     )

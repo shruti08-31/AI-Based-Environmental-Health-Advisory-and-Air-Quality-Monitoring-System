@@ -9,10 +9,39 @@ from src.api.waqi_client import POLLUTANT_KEYS, AqiReading
 from src.core.aqi_engine import AqiEngineResult, evaluate_aqi_from_reading
 from src.core.health_engine import HealthAdvisoryResult, SensitivityGroup, generate_health_advisory
 from src.database.connection import DatabaseError, get_connection
+from src.database.json_sync import (
+    hydrate_sqlite_from_json,
+    reading_to_json_record,
+    save_observation_to_json,
+)
 from src.database.models import initialize_database
 from src.intelligence.pollutant_analysis import PollutantAnalysisResult, analyze_pollutants_from_reading
 from src.intelligence.source_insights import SourceInsight, generate_source_insights
 from src.validation.data_validation import ValidationResult, validate_aqi_reading
+
+_HYDRATED_DB_KEYS: set[str] = set()
+
+
+def _db_cache_key(db_path: Path | str | None) -> str:
+    return str(Path(db_path).resolve()) if db_path is not None else "__default__"
+
+
+def _ensure_hydrated_if_empty(db_path: Path | str | None = None) -> None:
+    """
+    If `aqi_observations` currently has 0 rows after initialization, hydrate SQLite
+    from `data/observations_store.json` at most once per DB target per process.
+    """
+    key = _db_cache_key(db_path)
+    if key in _HYDRATED_DB_KEYS:
+        return
+
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) AS cnt FROM aqi_observations").fetchone()
+        row_count = int(row["cnt"]) if row is not None else 0
+
+    _HYDRATED_DB_KEYS.add(key)
+    if row_count == 0:
+        hydrate_sqlite_from_json(db_path=db_path)
 
 
 def _normalize_obs_date(observation_time: str | None) -> tuple[str, str]:
@@ -59,6 +88,7 @@ def save_observation_bundle(
     source_insights: list[SourceInsight] | None = None,
     advisory: HealthAdvisoryResult | None = None,
     db_path: Path | str | None = None,
+    _sync_json: bool = True,
 ) -> tuple[int, bool]:
     """
     Persist an AQI observation along with pollutant measurements, analysis, advisory, and alerts.
@@ -161,7 +191,18 @@ def save_observation_bundle(
             analysis=pol_analysis,
         )
 
-        return observation_id, True
+    if _sync_json:
+        json_rec = reading_to_json_record(
+            reading=reading,
+            validation=val,
+            aqi_result=aqi_res,
+            analysis=pol_analysis,
+            source_insights=insights,
+            advisory=adv,
+        )
+        save_observation_to_json(json_rec)
+
+    return observation_id, True
 
 
 def store_analysis_results(
@@ -338,6 +379,8 @@ def get_observations(
     db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
     initialize_database(db_path)
+    _ensure_hydrated_if_empty(db_path)
+
     clauses: list[str] = []
     params: list[Any] = []
 
@@ -415,6 +458,8 @@ def get_observations_by_date_range(
 
 def get_latest_observations_per_station(db_path: Path | str | None = None) -> list[dict[str, Any]]:
     initialize_database(db_path)
+    _ensure_hydrated_if_empty(db_path)
+
     with get_connection(db_path) as conn:
         rows = conn.execute(
             """

@@ -1,4 +1,5 @@
 ﻿from datetime import datetime, timezone
+import html
 import time
 import pandas as pd
 import plotly.graph_objects as go
@@ -7,14 +8,8 @@ import streamlit as st
 from config import config
 from src.alerts import evaluate_alert_candidates, persist_alerts
 from src.api import POLLUTANT_KEYS, AqiReading, StationSearchResult, WaqiClient, WaqiClientError
-from src.database import DatabaseError, get_observations, save_observation_bundle
-from src.utils import (
-    render_info_panel,
-    render_metric_card,
-    render_page_header,
-    render_pollutant_card,
-    render_warning_banner,
-)
+from src.database import get_observations, save_observation_bundle
+from src.utils import render_warning_banner
 from src.validation import ValidationResult, validate_aqi_reading
 
 # Verified WAQI Delhi station presets (used if live station search has not populated yet)
@@ -31,6 +26,259 @@ DELHI_PRESET_STATIONS: list[StationSearchResult] = [
 ]
 
 
+def _inject_live_page_theme() -> None:
+    st.markdown(
+        """
+        <style>
+        /* Remove Streamlit's default top dark header bar */
+        [data-testid="stHeader"],
+        header[data-testid="stHeader"],
+        [data-testid="stDecoration"],
+        [data-testid="stToolbar"] {
+            display: none !important;
+        }
+
+        /* Main canvas & typography */
+        .stApp {
+            background-color: #F7F9F8;
+            color: #16261E;
+        }
+        .block-container {
+            padding-top: 1.25rem !important;
+            padding-bottom: 2.5rem;
+            max-width: 1280px;
+        }
+
+        /* Deep forest-green sidebar */
+        [data-testid="stSidebar"] {
+            background-color: #133A2A !important;
+            border-right: 1px solid #0E2C20;
+        }
+        [data-testid="stSidebar"] * {
+            color: #E2ECE6 !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stSidebarNavLink"] {
+            border-radius: 10px;
+            margin: 2px 8px;
+            padding: 6px 12px;
+        }
+        [data-testid="stSidebar"] [data-testid="stSidebarNavLink"]:hover {
+            background-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stSidebarNavLink"][aria-current="page"] {
+            background-color: #315B48 !important;
+            font-weight: 600;
+        }
+
+        /* Green labels for text input & selectbox */
+        [data-testid="stTextInput"] label,
+        [data-testid="stTextInput"] label p,
+        [data-testid="stSelectbox"] label,
+        [data-testid="stSelectbox"] label p {
+            color: #1B5E3F !important;
+            font-weight: 600 !important;
+            font-size: 0.88rem !important;
+        }
+
+        /* Light green input & selectbox containers + dark green text */
+        [data-testid="stTextInput"] input,
+        [data-testid="stTextInput"] > div > div {
+            background-color: #EAF4EC !important;
+            color: #133A2A !important;
+            -webkit-text-fill-color: #133A2A !important;
+            font-weight: 600 !important;
+            border-color: #B4D6BE !important;
+            border-radius: 10px !important;
+        }
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+            background-color: #EAF4EC !important;
+            border-color: #B4D6BE !important;
+            border-radius: 10px !important;
+        }
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div > div,
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div > div > div,
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
+            color: #133A2A !important;
+            -webkit-text-fill-color: #133A2A !important;
+            opacity: 1 !important;
+            font-weight: 600 !important;
+        }
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] svg {
+            color: #133A2A !important;
+            fill: #133A2A !important;
+        }
+
+        /* Action Buttons */
+        div.stButton > button {
+            background-color: #133A2A;
+            color: #FFFFFF;
+            border: 1px solid #133A2A;
+            border-radius: 10px;
+            font-weight: 600;
+            transition: background-color 0.15s ease;
+        }
+        div.stButton > button:hover {
+            background-color: #1F5740;
+            border-color: #1F5740;
+            color: #FFFFFF;
+        }
+
+        /* Breadcrumb & Hero Header */
+        .eco-topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.9rem;
+            padding-bottom: 0.6rem;
+            border-bottom: 1px solid #E4ECE7;
+        }
+        .eco-breadcrumb {
+            font-size: 0.92rem;
+            color: #5E7167;
+        }
+        .eco-breadcrumb strong {
+            color: #16261E;
+            font-weight: 600;
+        }
+        .eco-sub {
+            font-size: 0.78rem;
+            color: #74877D;
+            margin-top: 2px;
+        }
+        .eco-live-pill {
+            background: #EAF3EC;
+            border: 1px solid #CBE0D1;
+            border-radius: 999px;
+            padding: 5px 13px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: #1A4D38;
+        }
+        .eco-dot {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background-color: #22A06B;
+            margin-right: 6px;
+        }
+
+        /* Validation Banner matching soft amber/rose tone */
+        .eco-val-banner {
+            background-color: #FDF2F2;
+            border: 1px solid #F5C6C6;
+            border-left: 4px solid #C83E3E;
+            color: #8A1F1F;
+            border-radius: 10px;
+            padding: 11px 16px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            margin: 0.65rem 0 0.95rem 0;
+        }
+
+        /* KPI Cards */
+        .eco-card {
+            background: #FFFFFF;
+            border: 1px solid #E3ECE6;
+            border-radius: 16px;
+            padding: 18px 20px;
+            box-shadow: 0 2px 8px rgba(19, 58, 42, 0.03);
+            height: 100%;
+            position: relative;
+            overflow: hidden;
+        }
+        .eco-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .eco-card-label {
+            font-size: 0.83rem;
+            font-weight: 500;
+            color: #5E7167;
+        }
+        .eco-badge {
+            font-size: 0.73rem;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 999px;
+        }
+        .eco-card-value {
+            font-size: 1.85rem;
+            font-weight: 700;
+            color: #16261E;
+            line-height: 1.15;
+            margin-bottom: 6px;
+        }
+        .eco-card-sub {
+            font-size: 0.79rem;
+            color: #6B7E74;
+        }
+
+        /* Color-coded Pollutant Cards */
+        .eco-pol-card {
+            background: #FFFFFF;
+            border: 1px solid #E3ECE6;
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin-bottom: 0.75rem;
+            box-shadow: 0 1px 5px rgba(19, 58, 42, 0.025);
+        }
+        .eco-pol-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        .eco-pol-name {
+            font-size: 0.84rem;
+            font-weight: 700;
+            color: #24382E;
+        }
+        .eco-pol-tag {
+            font-size: 0.68rem;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 999px;
+        }
+        .eco-pol-val {
+            font-size: 1.38rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .eco-pol-ref {
+            font-size: 0.75rem;
+            color: #6B7E74;
+        }
+
+        /* Seamless chart & section styling */
+        [data-testid="stPlotlyChart"],
+        [data-testid="stPlotlyChart"] > div {
+            background: transparent !important;
+        }
+
+        .eco-section-title {
+            font-size: 1.02rem;
+            font-weight: 700;
+            color: #16261E;
+            margin: 1rem 0 0.65rem 0;
+        }
+        .eco-ready-box {
+            background: linear-gradient(125deg, #F1F7F2 0%, #E3EFE6 100%);
+            border: 1px solid #D6E6DA;
+            border-radius: 16px;
+            padding: 22px 24px;
+            margin-top: 0.75rem;
+            color: #1F3B2D;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _classify_severity_label(aqi_val: float | int | None) -> str:
     if aqi_val is None:
         return "Pending"
@@ -45,10 +293,65 @@ def _classify_severity_label(aqi_val: float | int | None) -> str:
     return "Severe"
 
 
+def _severity_palette(severity: str) -> tuple[str, str, str]:
+    """Returns (badge_bg, badge_fg, accent_hex) for a severity label."""
+    s = severity.strip().lower()
+    if s == "good":
+        return ("#E4F5EC", "#166534", "#1F7A5A")
+    if s == "moderate":
+        return ("#FEF6E6", "#9A5B13", "#D97706")
+    if s == "sensitive":
+        return ("#FDECE4", "#9A3412", "#EA580C")
+    if s == "unhealthy":
+        return ("#FBE7E7", "#991B1B", "#DC2626")
+    if s == "severe":
+        return ("#F3E8FF", "#6B21A8", "#7E22CE")
+    return ("#EEF3F0", "#4A6055", "#5E7167")
+
+
+def _pollutant_level_style(p_key: str, val: float | None) -> tuple[str, str, str, str]:
+    """Returns (border_accent, pill_bg, pill_fg, level_text) based on pollutant value."""
+    if val is None:
+        return ("#CBD5E1", "#F1F5F9", "#64748B", "Missing")
+    thresholds: dict[str, tuple[float, float, float]] = {
+        "pm25": (30.0, 60.0, 120.0),
+        "pm10": (50.0, 100.0, 250.0),
+        "no2": (40.0, 80.0, 180.0),
+        "so2": (40.0, 80.0, 380.0),
+        "co": (1.0, 2.0, 10.0),
+        "o3": (50.0, 100.0, 168.0),
+    }
+    low, mod, high = thresholds.get(p_key, (50.0, 100.0, 200.0))
+    if val <= low:
+        return ("#22A06B", "#E4F5EC", "#166534", "Low")
+    if val <= mod:
+        return ("#D97706", "#FEF6E6", "#9A5B13", "Moderate")
+    if val <= high:
+        return ("#EA580C", "#FDECE4", "#9A3412", "Elevated")
+    return ("#DC2626", "#FBE7E7", "#991B1B", "High")
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_search_cities(keyword: str, token_fingerprint: str) -> list[StationSearchResult]:
     client = WaqiClient(app_config=config)
     return client.search_cities(keyword)
+
+
+def _build_unavailable_reading(
+    target_query: str,
+    chosen_station: StationSearchResult | None = None,
+) -> AqiReading:
+    """Creates a clean empty AqiReading when live fetch fails or returns no AQI."""
+    return AqiReading(
+        query=target_query,
+        station_name=chosen_station.station_name if chosen_station else target_query,
+        aqi=None,
+        dominant_pollutant=None,
+        pollutants={k: None for k in POLLUTANT_KEYS},
+        observation_time=None,
+        latitude=chosen_station.latitude if chosen_station else None,
+        longitude=chosen_station.longitude if chosen_station else None,
+    )
 
 
 def _render_pollutant_chart(pollutants: dict[str, float | None], station_label: str) -> None:
@@ -57,29 +360,45 @@ def _render_pollutant_chart(pollutants: dict[str, float | None], station_label: 
         for key in POLLUTANT_KEYS
         if pollutants.get(key) is not None
     ]
-    st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-    st.markdown(f"**Reported Pollutant Measurements — {station_label}**")
-    if not rows:
-        st.caption("No numeric pollutant measurements were returned in this payload.")
-    else:
-        df = pd.DataFrame(rows)
-        fig = go.Figure(
-            go.Bar(
-                x=df["Pollutant"],
-                y=df["Value"],
-                marker_color="#0284C7",
+    with st.container(border=True):
+        st.markdown(f"**Reported Pollutant Measurements — {station_label}**")
+        if not rows:
+            st.caption("No numeric pollutant measurements were returned in this payload.")
+        else:
+            df = pd.DataFrame(rows)
+            fig = go.Figure(
+                go.Bar(
+                    x=df["Pollutant"],
+                    y=df["Value"],
+                    marker_color="#133A2A",
+                    marker_line_color="#0E2C20",
+                    marker_line_width=1,
+                    text=df["Value"].map(lambda v: f"{v:g}"),
+                    textposition="outside",
+                    textfont={"color": "#133A2A", "size": 12, "family": "sans-serif"},
+                )
             )
-        )
-        fig.update_layout(
-            height=280,
-            margin={"l": 40, "r": 20, "t": 20, "b": 40},
-            paper_bgcolor="#FFFFFF",
-            plot_bgcolor="#F8FAFC",
-            xaxis={"title": "Pollutant"},
-            yaxis={"title": "Reported Value (IAQI / Raw)"},
-        )
-        st.plotly_chart(fig, width="stretch", key="live_pollutant_bar_chart")
-    st.markdown("</div>", unsafe_allow_html=True)
+            fig.update_layout(
+                height=295,
+                margin={"l": 44, "r": 20, "t": 28, "b": 42},
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font={"color": "#133A2A"},
+                xaxis={
+                    "title": {"text": "Pollutant", "font": {"color": "#133A2A", "size": 12}},
+                    "tickfont": {"color": "#133A2A", "size": 11},
+                    "showgrid": False,
+                    "linecolor": "#B8CFC1",
+                },
+                yaxis={
+                    "title": {"text": "Reported Value (IAQI / Raw)", "font": {"color": "#133A2A", "size": 12}},
+                    "tickfont": {"color": "#133A2A", "size": 11},
+                    "gridcolor": "#DFEAE3",
+                    "linecolor": "#B8CFC1",
+                    "zerolinecolor": "#9BBAA6",
+                },
+            )
+            st.plotly_chart(fig, width="stretch", key="live_pollutant_bar_chart")
 
 
 def _render_reading_view(
@@ -89,52 +408,93 @@ def _render_reading_view(
     from_cache: bool,
 ) -> None:
     severity = _classify_severity_label(reading.aqi)
-    aqi_display = str(reading.aqi) if reading.aqi is not None else "Unavailable"
+    badge_bg, badge_fg, accent_hex = _severity_palette(severity)
+
+    aqi_display = html.escape(str(reading.aqi) if reading.aqi is not None else "Unavailable")
     station_display = reading.station_name or "Station Name Unavailable"
+    safe_station = html.escape(station_display)
     coord_display = (
         f"{reading.latitude:.4f}, {reading.longitude:.4f}"
         if reading.latitude is not None and reading.longitude is not None
         else "Coordinates Missing"
     )
+    safe_coords = html.escape(coord_display)
     obs_display = reading.observation_time or "Timestamp Missing"
+    dom_display = html.escape((reading.dominant_pollutant or "Not Reported").upper())
+    completeness_pct = int(validation.completeness_ratio * 100)
 
     for err in validation.errors:
-        st.error(f"Validation Error: {err}")
+        st.markdown(
+            f'<div class="eco-val-banner">Validation Error: {html.escape(err)}</div>',
+            unsafe_allow_html=True,
+        )
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        render_metric_card(
-            label="Reported AQI",
-            value=aqi_display,
-            meta=f"Severity Band: {severity}",
-            is_placeholder=False,
+        st.markdown(
+            f"""
+            <div class="eco-card" style="border-top:4px solid {accent_hex};">
+                <div class="eco-card-header">
+                    <span class="eco-card-label">Reported AQI</span>
+                    <span class="eco-badge" style="background:{badge_bg};color:{badge_fg};">{html.escape(severity)}</span>
+                </div>
+                <div class="eco-card-value" style="color:{accent_hex};">{aqi_display}</div>
+                <div class="eco-card-sub">Severity Band: {html.escape(severity)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
     with c2:
-        render_metric_card(
-            label="Dominant Pollutant",
-            value=(reading.dominant_pollutant or "Not Reported").upper(),
-            meta=f"Completeness: {int(validation.completeness_ratio * 100)}% of 6 pollutants",
-            is_placeholder=False,
+        st.markdown(
+            f"""
+            <div class="eco-card" style="border-top:4px solid #133A2A;">
+                <div class="eco-card-header">
+                    <span class="eco-card-label">Dominant Pollutant</span>
+                    <span class="eco-badge" style="background:#EAF3EC;color:#166534;">{completeness_pct}% Feed</span>
+                </div>
+                <div class="eco-card-value">{dom_display}</div>
+                <div class="eco-card-sub">Completeness: {completeness_pct}% of 6 pollutants</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
     with c3:
-        render_metric_card(
-            label="Station Coordinates",
-            value=coord_display,
-            meta=station_display,
-            is_placeholder=False,
+        st.markdown(
+            f"""
+            <div class="eco-card" style="border-top:4px solid #1F7A5A;">
+                <div class="eco-card-header">
+                    <span class="eco-card-label">Station Coordinates</span>
+                </div>
+                <div class="eco-card-value" style="font-size:1.45rem;">{safe_coords}</div>
+                <div class="eco-card-sub">{safe_station}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-    st.markdown("### Pollutant Breakdown (Unimputed)")
+    st.markdown('<div class="eco-section-title">Pollutant Breakdown (Unimputed)</div>', unsafe_allow_html=True)
     for idx in range(0, len(POLLUTANT_KEYS), 3):
         cols = st.columns(3)
         for col, p_key in zip(cols, POLLUTANT_KEYS[idx : idx + 3]):
             val = reading.pollutants.get(p_key)
+            border_c, tag_bg, tag_fg, level_txt = _pollutant_level_style(p_key, val)
+            val_label = f"{val:g}" if val is not None else "Missing (Not Available)"
+            std_ref = "WAQI iaqi feed value" if val is not None else "Absent in API response"
+            val_font = "1.45rem" if val is not None else "1.02rem"
+            val_color = "#16261E" if val is not None else "#6B7E74"
             with col:
-                render_pollutant_card(
-                    pollutant_name=p_key.upper(),
-                    concentration_label=f"{val:g}" if val is not None else "Missing (Not Available)",
-                    standard_ref="WAQI iaqi feed value" if val is not None else "Absent in API response",
-                    is_placeholder=False,
+                st.markdown(
+                    f"""
+                    <div class="eco-pol-card" style="border-left:4px solid {border_c};">
+                        <div class="eco-pol-top">
+                            <span class="eco-pol-name">{html.escape(p_key.upper())}</span>
+                            <span class="eco-pol-tag" style="background:{tag_bg};color:{tag_fg};">{level_txt}</span>
+                        </div>
+                        <div class="eco-pol-val" style="font-size:{val_font};color:{val_color};">{html.escape(val_label)}</div>
+                        <div class="eco-pol-ref">{html.escape(std_ref)}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
 
     _render_pollutant_chart(reading.pollutants, station_display)
@@ -170,12 +530,23 @@ def _render_reading_view(
 
 
 def main() -> None:
+    _inject_live_page_theme()
+
     default_city = st.session_state.get("selected_location", config.default_location)
 
-    render_page_header(
-        title="Live AQI Monitoring",
-        subtitle="Select a monitoring station in Delhi or search any city, fetch live WAQI telemetry, and inspect data quality.",
-        is_placeholder=False,
+    st.markdown(
+        """
+        <div class="eco-topbar">
+            <div>
+                <div class="eco-breadcrumb">EcoHealth &nbsp;/&nbsp; <strong>Live AQI Monitoring</strong></div>
+                <div class="eco-sub">Select a monitoring station in Delhi or search any city, fetch live WAQI telemetry, and inspect data quality.</div>
+            </div>
+            <div class="eco-live-pill">
+                <span class="eco-dot"></span>WAQI Live Feed
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     if not config.has_api_token:
@@ -230,6 +601,7 @@ def main() -> None:
         key=lambda m: (0 if str(m.aqi_raw).isdigit() else 1, m.station_name),
     )
     selected_feed_target = cleaned_city
+    chosen_station: StationSearchResult | None = None
 
     if matches:
         option_labels = [m.station_name for m in matches]
@@ -239,13 +611,13 @@ def main() -> None:
             format_func=lambda i: option_labels[i],
             key="waqi_station_choice",
         )
-        chosen = matches[chosen_idx]
-        if chosen.uid is not None:
-            selected_feed_target = f"@{chosen.uid}"
-        elif "City-Wide" in chosen.station_name:
+        chosen_station = matches[chosen_idx]
+        if chosen_station.uid is not None:
+            selected_feed_target = f"@{chosen_station.uid}"
+        elif "City-Wide" in chosen_station.station_name:
             selected_feed_target = "Delhi"
         else:
-            selected_feed_target = chosen.station_name
+            selected_feed_target = chosen_station.station_name
 
     auto_live = st.toggle("Enable Live Auto-Refresh (every 2 hours)", value=False, key="live_auto_refresh_toggle")
 
@@ -254,10 +626,10 @@ def main() -> None:
 
     if explicit_refresh or initial_load:
         with st.spinner(f"Fetching current live telemetry for {selected_feed_target} from WAQI..."):
+            fetched_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             try:
                 client = WaqiClient(app_config=config)
                 reading = client.get_city_aqi(selected_feed_target)
-                fetched_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
                 st.session_state["waqi_last_reading"] = reading
                 st.session_state["waqi_last_fetched_utc"] = fetched_utc
@@ -283,13 +655,22 @@ def main() -> None:
                         st.session_state["last_persisted_status"] = (
                             f"Live API checked; station observation #{obs_id} is already up to date in SQLite."
                         )
-                except DatabaseError as db_exc:
-                    st.error(f"Database persistence error: {db_exc.message}")
+                except Exception as db_exc:
+                    st.session_state["last_persisted_status"] = (
+                        f"Live telemetry displayed; SQLite persistence skipped ({db_exc})."
+                    )
 
                 if explicit_refresh:
                     st.toast(f"Updated live AQI for {reading.station_name or selected_feed_target}")
             except WaqiClientError as exc:
-                st.error(f"WAQI fetch failed ({exc.kind.value}): {exc.message}")
+                fallback_reading = _build_unavailable_reading(selected_feed_target, chosen_station)
+                st.session_state["waqi_last_reading"] = fallback_reading
+                st.session_state["waqi_last_fetched_utc"] = fetched_utc
+                st.session_state["waqi_last_fetched_at"] = fetched_utc
+                st.session_state["waqi_last_was_cached"] = False
+                st.session_state["last_persisted_status"] = (
+                    f"WAQI fetch unavailable ({exc.kind.value}: {exc.message})."
+                )
 
     last_reading: AqiReading | None = st.session_state.get("waqi_last_reading")
     last_fetched_utc: str | None = st.session_state.get("waqi_last_fetched_utc")
@@ -300,10 +681,14 @@ def main() -> None:
         _render_reading_view(last_reading, validation, last_fetched_utc, from_cache=was_cached)
         st.session_state["waqi_last_was_cached"] = True
     else:
-        render_info_panel(
-            title="Ready to Query WAQI",
-            body="Select a monitoring station above and click 'Fetch Live AQI' or search any city keyword.",
-            is_placeholder=False,
+        st.markdown(
+            """
+            <div class="eco-ready-box">
+                <strong>Ready to Query WAQI</strong><br>
+                Select a monitoring station above and click 'Fetch Live AQI' or search any city keyword.
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
     if auto_live:

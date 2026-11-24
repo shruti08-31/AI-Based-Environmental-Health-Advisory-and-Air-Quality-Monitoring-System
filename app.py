@@ -1,5 +1,7 @@
 import streamlit as st
+
 from config import config
+from src.database import hydrate_sqlite_from_json, initialize_database
 from src.utils import apply_base_theme
 
 
@@ -55,6 +57,9 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     apply_base_theme()
+
+    initialize_database()
+    hydrate_sqlite_from_json()
 
     if "selected_location" not in st.session_state:
         st.session_state["selected_location"] = config.default_location

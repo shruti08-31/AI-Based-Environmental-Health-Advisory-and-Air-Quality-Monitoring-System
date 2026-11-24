@@ -16,17 +16,18 @@ GROQ_FALLBACK_MODELS: tuple[str, ...] = (
     "llama-3.1-8b-instant",
 )
 
-STRICT_SYSTEM_PROMPT = """You are an intelligent Environmental Health & Air Quality Analyst embedded inside a live monitoring platform.
-Synthesize the deterministic telemetry, multi-module analytics, and retrieved scientific references into a clear, natural, insightful response.
+STRICT_SYSTEM_PROMPT = """You are a friendly, intelligent Environmental Health & Air Quality Assistant having a natural conversation with the user.
+Reply in clear, conversational prose (short paragraphs or brief natural points when helpful)—avoid heavy report templates, rigid headings, or Markdown tables unless the user explicitly asks for a table.
 
-Mandatory grounding rules:
+Follow these strict accuracy & safety rules:
 1. Never invent missing pollutant measurements, timestamps, coordinates, or AQI thresholds.
-2. Never recalculate or override AQI numbers; use the exact deterministic values provided.
+2. Never recalculate or override AQI numbers; always use the exact deterministic values given in the context.
 3. Never give medical diagnoses or clinical treatment prescriptions.
-4. Never claim pollutant combinations or weather patterns prove a specific emission source—frame them as evidence-graded associations.
-5. Explicitly state when historical data, model artifacts, or sensor fields are insufficient.
-6. Cite the retrieved knowledge base titles/sources naturally when explaining health effects or mechanisms.
-7. Answer follow-up questions using prior conversation context plus the latest station snapshot."""
+4. Never claim pollutant combinations or weather patterns prove a specific emission source—describe them naturally as possible associations.
+5. When historical data, model artifacts, or sensor fields are missing or sparse, say so plainly and conversationally, and suggest what to fetch or check next.
+6. Weave insights from the retrieved knowledge base naturally into your answer and mention the source title when citing reference guidance.
+7. Build smoothly on earlier messages in the conversation so follow-ups feel continuous.
+8. When using information from the Trusted Web Search Results, explicitly name the source website (e.g., WHO, US EPA, CPCB India, AirNow, CDC) and include its clickable Markdown link [Site Name](URL). Never cite unverified blogs or invent URLs."""
 
 
 @dataclass
@@ -49,12 +50,24 @@ def _build_grounded_prompt(user_query: str, routed: RoutedContext) -> str:
     else:
         rag_blocks = "None retrieved."
 
+    if routed.web_sources:
+        web_blocks = "\n\n".join(
+            f"- Website: {w.site_name} ({w.domain})\n"
+            f"  Page Title: {w.title}\n"
+            f"  URL: {w.url}\n"
+            f"  Excerpt: {w.snippet}"
+            for w in routed.web_sources
+        )
+    else:
+        web_blocks = "No external web snippets retrieved for this turn."
+
     return (
         f"Primary Routed Intent: {routed.intent.value}\n"
         f"Sufficient System Evidence: {routed.has_sufficient_evidence}\n\n"
         f"Live & Multi-Module System Summary:\n{routed.deterministic_summary}\n\n"
         f"Structured Telemetry & Analytics Context (JSON):\n{facts_json}\n\n"
         f"Retrieved Knowledge Base Context:\n{rag_blocks}\n\n"
+        f"Trusted Web Search Results:\n{web_blocks}\n\n"
         f"User Question:\n{user_query}\n\n"
         "Respond directly, clearly, and helpfully using only the verified facts and retrieved references above."
     )
@@ -66,6 +79,10 @@ def _format_deterministic_fallback(routed: RoutedContext, reason: str) -> str:
         lines.append("\n**Referenced Knowledge Base Context:**")
         for doc in routed.retrieved_docs:
             lines.append(f"- **{doc.title}** ({doc.source}): {doc.text}")
+    if routed.web_sources:
+        lines.append("\n**Trusted Government & Public-Health Web Sources:**")
+        for web in routed.web_sources:
+            lines.append(f"- [{web.site_name}]({web.url}) — {web.title}: {web.snippet}")
     lines.append(f"\n_Note: Displayed deterministic application output directly ({reason})._")
     return "\n".join(lines)
 
@@ -86,7 +103,9 @@ def generate_assistant_response(
     session: requests.Session | None = None,
     chat_history: list[dict[str, Any]] | None = None,
 ) -> AssistantResponse:
-    sources = list(dict.fromkeys(f"{d.title} — {d.source}" for d in routed.retrieved_docs))
+    rag_sources = [f"[KB] {d.title} — {d.source}" for d in routed.retrieved_docs]
+    web_sources = [f"[Web] {w.site_name}: [{w.title}]({w.url})" for w in routed.web_sources]
+    sources = list(dict.fromkeys(rag_sources + web_sources))
 
     if not app_config.has_groq_api_key:
         reason = "GROQ_API_KEY is not configured in .env"

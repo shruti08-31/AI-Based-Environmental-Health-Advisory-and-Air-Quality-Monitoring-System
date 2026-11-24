@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 import numpy as np
 import pandas as pd
@@ -27,10 +27,10 @@ class AnomalyFinding:
 def _parse_dt(val: Any) -> datetime | None:
     if not val or not isinstance(val, str):
         return None
-    try:
-        return datetime.fromisoformat(val.strip())
-    except ValueError:
+    ts = pd.to_datetime(val.strip(), errors="coerce", utc=True)
+    if pd.isna(ts):
         return None
+    return ts.to_pydatetime()
 
 
 def _valid_float(val: Any) -> float | None:
@@ -78,7 +78,7 @@ def detect_anomalies(
         return []
 
     df = pd.DataFrame(valid_obs)
-    df = df.sort_values(by=["_dt", "observation_time"], ascending=True).reset_index(drop=True)
+    df = df.sort_values(by=["_dt", "observation_time"], ascending=True, na_position="last").reset_index(drop=True)
 
     aqi_series = df["_aqi"].astype(float)
     baseline_mean = float(aqi_series.mean())
@@ -95,23 +95,22 @@ def detect_anomalies(
     prev_aqi: float | None = None
     prev_dt: datetime | None = None
 
-    for idx, row in df.iterrows():
+    for _, row in df.iterrows():
         obs_time = str(row.get("observation_time") or "Missing Timestamp")
         st_name = str(row.get("station_name") or row.get("query_city") or "Unknown")
         cur_aqi = float(row["_aqi"])
         cur_dt: datetime | None = row["_dt"]
+        if cur_dt is not None and cur_dt.tzinfo is None:
+            cur_dt = cur_dt.replace(tzinfo=timezone.utc)
 
         interval_min: float | None = None
         interval_note = "Regular/initial interval"
         if prev_dt is not None and cur_dt is not None:
-            dt_a = prev_dt if prev_dt.tzinfo else prev_dt
-            dt_b = cur_dt if cur_dt.tzinfo else cur_dt
-            if (dt_a.tzinfo is None) == (dt_b.tzinfo is None):
-                delta_sec = (dt_b - dt_a).total_seconds()
-                if delta_sec >= 0:
-                    interval_min = round(delta_sec / 60.0, 1)
-                    if interval_min > 180:
-                        interval_note = f"Irregular gap ({interval_min:g} min since prior reading)"
+            delta_sec = (cur_dt - prev_dt).total_seconds()
+            if delta_sec >= 0:
+                interval_min = round(delta_sec / 60.0, 1)
+                if interval_min > 180:
+                    interval_note = f"Irregular gap ({interval_min:g} min since prior reading)"
 
         aqi_delta: float | None = None
         sudden_jump = False
