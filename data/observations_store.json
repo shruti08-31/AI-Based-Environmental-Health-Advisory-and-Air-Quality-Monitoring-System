@@ -7509,6 +7509,54 @@
         "co": 53.6,
         "o3": 1.2
       }
+    },
+    {
+      "query_city": "@2553",
+      "station_name": "Anand Vihar, Delhi, Delhi, India",
+      "latitude": 28.6508,
+      "longitude": 77.3152,
+      "observation_time": "2026-11-25T14:00:00+05:30",
+      "waqi_reported_aqi": 152,
+      "waqi_aqi_raw": 152,
+      "calculated_aqi": 325,
+      "aqi_category": "Very Poor",
+      "dominant_pollutant": "pm25",
+      "completeness_ratio": 1.0,
+      "is_valid": 1,
+      "is_stale": 0,
+      "advisory_urgency": "Very High",
+      "pollutants": {
+        "pm25": 152.0,
+        "pm10": 77.0,
+        "no2": 6.2,
+        "so2": 4.3,
+        "co": 6.4,
+        "o3": 10.9
+      }
+    },
+    {
+      "query_city": "@10114",
+      "station_name": "Delhi Institute of Tool Engineering, Wazirpur, Delhi, Delhi, India",
+      "latitude": 28.700505,
+      "longitude": 77.165603,
+      "observation_time": "2026-11-25T14:00:00+05:30",
+      "waqi_reported_aqi": 164,
+      "waqi_aqi_raw": 164,
+      "calculated_aqi": 334,
+      "aqi_category": "Very Poor",
+      "dominant_pollutant": "pm25",
+      "completeness_ratio": 1.0,
+      "is_valid": 1,
+      "is_stale": 1,
+      "advisory_urgency": "Very High",
+      "pollutants": {
+        "pm25": 164.0,
+        "pm10": 110.0,
+        "no2": 17.8,
+        "so2": 9.5,
+        "co": 8.9,
+        "o3": 19.6
+      }
     }
   ]
 }

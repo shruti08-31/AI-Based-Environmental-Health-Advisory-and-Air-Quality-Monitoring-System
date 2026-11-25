@@ -93,7 +93,7 @@ def _inject_pollutant_intel_theme() -> None:
             margin-right: 6px;
         }
 
-        /* Top 4 KPI Cards */
+        /* Top KPI Cards */
         .eco-card {
             background: #FFFFFF;
             border: 1px solid #E3ECE6;
@@ -370,7 +370,6 @@ def main() -> None:
         if analysis.highest_sub_index is not None
         else "No sub-index"
     )
-    lead_diff = "Different" if analysis.raw_vs_subindex_differs else "Same / N/A"
     near_count = str(len(analysis.approaching_threshold_pollutants))
     near_meta = (
         ", ".join(p.upper() for p in analysis.approaching_threshold_pollutants)
@@ -378,7 +377,7 @@ def main() -> None:
         else "None flagged"
     )
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3 = st.columns(3)
     with m1:
         st.markdown(
             f"""
@@ -402,17 +401,6 @@ def main() -> None:
             unsafe_allow_html=True,
         )
     with m3:
-        st.markdown(
-            f"""
-            <div class="eco-card" style="border-top:4px solid #315B48;">
-                <div class="eco-card-label">Raw vs. Sub-Index Lead</div>
-                <div class="eco-card-value" style="font-size:1.45rem;">{html.escape(lead_diff)}</div>
-                <div class="eco-card-sub">Highest raw reading vs. highest sub-index</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with m4:
         st.markdown(
             f"""
             <div class="eco-card" style="border-top:4px solid #D97706;">
